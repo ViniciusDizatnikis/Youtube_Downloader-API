@@ -9,6 +9,7 @@ import asyncio
 import uuid
 import os
 import re
+import gc
 
 # --- Configurações iniciais ---
 app = FastAPI()
@@ -60,15 +61,20 @@ def get_itags(yt, itag=None):
 async def delete_after_timeout(file_id: str, timeout: int = 60):
     await asyncio.sleep(timeout)
     file_info = downloads_temp.pop(file_id, None)
-    if file_info and os.path.exists(file_info["path"]):
-        os.remove(file_info["path"])
+    if file_info:
+        try:
+            if os.path.exists(file_info["path"]):
+                os.remove(file_info["path"])
+        except Exception:
+            pass
+    gc.collect()
 
 def sanitize_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "", name)
 
 def convert_to_mp3(input_path, output_path):
     command = ['ffmpeg', '-y', '-i', input_path, output_path]
-    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # --- Rotas da API ---
 
@@ -87,7 +93,10 @@ async def get_itags_route(request: Request):
 
     try:
         yt = YouTube(url)
-        return get_itags(yt, itag)
+        result = get_itags(yt, itag)
+        del yt
+        gc.collect()
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -101,7 +110,7 @@ async def get_video_info(request: Request):
 
     try:
         yt = YouTube(url)
-        return responses.JSONResponse(content={
+        info = responses.JSONResponse(content={
             'title': yt.title,
             'author': yt.author,
             'length': yt.length,
@@ -126,6 +135,9 @@ async def get_video_info(request: Request):
                 for s in yt.streams.filter(only_audio=True)
             ],
         })
+        del yt
+        gc.collect()
+        return info
     except Exception as e:
         return {"error": str(e)}
 
@@ -149,14 +161,15 @@ async def download_video(request: Request):
         resolution = "audio" if is_audio else (stream.resolution or "unknown")
 
         if resolution not in ALLOWED_RESOLUTIONS and resolution != "1080p":
+            del yt
+            del stream
+            gc.collect()
             return {"error": f"Resolução {resolution} não permitida. Apenas {', '.join(ALLOWED_RESOLUTIONS)} e 1080p são permitidas."}
 
-        # Áudio
         if is_audio:
             ext = ".webm" if "webm" in stream.mime_type else ".m4a"
             raw_filename = f"{title}_{stream.abr}{ext}"
             raw_path = os.path.join(DOWNLOAD_DIR, raw_filename)
-
             stream.download(output_path=DOWNLOAD_DIR, filename=raw_filename)
 
             mp3_filename = f"{title}_{stream.abr}.mp3"
@@ -171,9 +184,12 @@ async def download_video(request: Request):
             downloads_temp[file_id] = {"path": final_path}
             asyncio.create_task(delete_after_timeout(file_id))
 
-            return {"message": "Áudio convertido para MP3", "download_url": f"http://localhost:8000/download/{file_id}"}
+            del yt
+            del stream
+            gc.collect()
 
-        # Vídeo sem áudio embutido
+            return {"message": "Áudio convertido para MP3", "download_url": f"{BASE_URL}/download/{file_id}"}
+
         elif not stream.includes_audio_track:
             video_path = os.path.join(DOWNLOAD_DIR, f"{title}_{resolution}_video.mp4")
             stream.download(output_path=DOWNLOAD_DIR, filename=os.path.basename(video_path))
@@ -193,7 +209,7 @@ async def download_video(request: Request):
                 "-strict", "experimental",
                 final_path,
             ]
-            subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             os.remove(video_path)
             os.remove(audio_path)
 
@@ -201,9 +217,13 @@ async def download_video(request: Request):
             downloads_temp[file_id] = {"path": final_path}
             asyncio.create_task(delete_after_timeout(file_id))
 
-            return {"message": f"Vídeo {resolution} com áudio mesclado", "download_url": f"http://localhost:8000/download/{file_id}"}
+            del yt
+            del stream
+            del audio_stream
+            gc.collect()
 
-        # Vídeo com áudio embutido
+            return {"message": f"Vídeo {resolution} com áudio mesclado", "download_url": f"{BASE_URL}/download/{file_id}"}
+
         else:
             filename = f"{title}_{resolution}.mp4"
             download_path = os.path.join(DOWNLOAD_DIR, filename)
@@ -212,6 +232,10 @@ async def download_video(request: Request):
             file_id = str(uuid.uuid4())
             downloads_temp[file_id] = {"path": download_path}
             asyncio.create_task(delete_after_timeout(file_id))
+
+            del yt
+            del stream
+            gc.collect()
 
             return {"message": f"Vídeo {resolution} com áudio embutido", "download_url": f"{BASE_URL}/download/{file_id}"}
 
