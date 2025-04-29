@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 from pytubefix import YouTube
+from dotenv import load_dotenv
 import subprocess
 import asyncio
 import uuid
@@ -11,6 +12,9 @@ import re
 
 # --- Configurações iniciais ---
 app = FastAPI()
+
+load_dotenv()
+BASE_URL = os.getenv("BASE_URL")
 
 app.add_middleware(
     CORSMiddleware,
@@ -209,7 +213,7 @@ async def download_video(request: Request):
             downloads_temp[file_id] = {"path": download_path}
             asyncio.create_task(delete_after_timeout(file_id))
 
-            return {"message": f"Vídeo {resolution} com áudio embutido", "download_url": f"http://localhost:8000/download/{file_id}"}
+            return {"message": f"Vídeo {resolution} com áudio embutido", "download_url": f"{BASE_URL}/download/{file_id}"}
 
     except Exception as e:
         return {"error": str(e)}
