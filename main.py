@@ -92,7 +92,7 @@ async def get_itags_route(request: Request):
         return {"error": "URL não fornecida"}
 
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, use_po_token=True)
         result = get_itags(yt, itag)
         del yt
         gc.collect()
