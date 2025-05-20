@@ -65,8 +65,8 @@ async def delete_after_timeout(file_id: str, timeout: int = 60):
         try:
             if os.path.exists(file_info["path"]):
                 os.remove(file_info["path"])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Erro ao excluir arquivo: {e}")
     gc.collect()
 
 def sanitize_filename(name):
@@ -109,7 +109,7 @@ async def get_video_info(request: Request):
         return {"error": "URL inválida"}
 
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, use_po_token=True)
         info = responses.JSONResponse(content={
             'title': yt.title,
             'author': yt.author,
@@ -153,9 +153,13 @@ async def download_video(request: Request):
         return {"error": "itag não fornecido"}
 
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, use_po_token=True)
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
+
+        if not stream:
+            return {"error": f"Stream com itag {itag} não encontrada."}
+
 
         is_audio = stream.mime_type.startswith("audio/")
         resolution = "audio" if is_audio else (stream.resolution or "unknown")
