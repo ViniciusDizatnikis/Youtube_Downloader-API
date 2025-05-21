@@ -65,8 +65,8 @@ async def delete_after_timeout(file_id: str, timeout: int = 60):
         try:
             if os.path.exists(file_info["path"]):
                 os.remove(file_info["path"])
-        except Exception as e:
-            print(f"Erro ao excluir arquivo: {e}")
+        except Exception:
+            pass
     gc.collect()
 
 def sanitize_filename(name):
@@ -157,10 +157,6 @@ async def download_video(request: Request):
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
 
-        if not stream:
-            return {"error": f"Stream com itag {itag} não encontrada."}
-
-
         is_audio = stream.mime_type.startswith("audio/")
         resolution = "audio" if is_audio else (stream.resolution or "unknown")
 
@@ -205,7 +201,7 @@ async def download_video(request: Request):
 
             final_path = os.path.join(FINAL_DIR, f"{title}_{resolution}.mp4")
             command = [
-                "ffmpeg", "-y", "-nostdin",
+                "ffmpeg", "-y",
                 "-i", video_path,
                 "-i", audio_path,
                 "-c:v", "copy",
