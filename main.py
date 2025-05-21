@@ -76,6 +76,31 @@ def convert_to_mp3(input_path, output_path):
     command = ['ffmpeg', '-y', '-i', input_path, output_path]
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def download_with_ytdlp(url: str, output_path: str, audio_only: bool = False):
+    output_template = os.path.join(output_path, '%(title)s.%(ext)s')
+    command = [
+        'yt-dlp',
+        url,
+        '-o', output_template
+    ]
+
+    if audio_only:
+        command += ['-f', 'bestaudio', '--extract-audio', '--audio-format', 'mp3']
+    else:
+        command += ['-f', 'bestvideo+bestaudio/best']
+
+    process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    if process.returncode != 0:
+        raise Exception(f"Erro yt-dlp: {process.stderr}")
+
+    latest_file = max(
+        [os.path.join(output_path, f) for f in os.listdir(output_path)],
+        key=os.path.getmtime
+    )
+    return latest_file
+
+
 # --- Rotas da API ---
 
 @app.get("/")
@@ -146,8 +171,6 @@ async def download_video(request: Request):
     data = await request.json()
     url = data.get('url')
     itag = data.get('itag')
-    visitor_data = data.get('visitorData')
-    po_token = data.get('poToken')
 
     if not url:
         return {"error": "URL não fornecida"}
@@ -155,10 +178,24 @@ async def download_video(request: Request):
         return {"error": "itag não fornecido"}
 
     try:
-        if visitor_data and po_token:
-            yt = YouTube(url, use_po_token=True, visitor_data=visitor_data, po_token=po_token)
-        else:
-            yt = YouTube(url, client="WEB", use_po_token=True)
+        yt = YouTube(url, "WEB")
+    except Exception as e:
+        try:
+            is_audio = data.get('audio_only', False)
+            final_path = download_with_ytdlp(url, FINAL_DIR, audio_only=is_audio)
+
+            file_id = str(uuid.uuid4())
+            downloads_temp[file_id] = {"path": final_path}
+            asyncio.create_task(delete_after_timeout(file_id))
+
+            return {
+                "message": "Baixado com yt-dlp (fallback)",
+                "download_url": f"{BASE_URL}/download/{file_id}"
+            }
+        except Exception as fallback_error:
+            return {"error": f"Falha com pytubefix e yt-dlp: {str(fallback_error)}"}
+
+    try:
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
 
