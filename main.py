@@ -92,7 +92,7 @@ async def get_itags_route(request: Request):
         return {"error": "URL não fornecida"}
 
     try:
-        yt = YouTube(url, "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
+        yt = YouTube(url, "WEB")
         result = get_itags(yt, itag)
         del yt
         gc.collect()
@@ -109,7 +109,7 @@ async def get_video_info(request: Request):
         return {"error": "URL inválida"}
 
     try:
-        yt = YouTube(url, "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
+        yt = YouTube(url, "WEB")
         info = responses.JSONResponse(content={
             'title': yt.title,
             'author': yt.author,
@@ -153,7 +153,7 @@ async def download_video(request: Request):
         return {"error": "itag não fornecido"}
 
     try:
-        yt = YouTube(url, "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
+        yt = YouTube(url, "WEB")
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
 
