@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, responses
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.background import BackgroundTask
+from fastapi import BackgroundTasks
 from pytubefix import YouTube
 from dotenv import load_dotenv
 import subprocess
@@ -92,7 +92,7 @@ async def get_itags_route(request: Request):
         return {"error": "URL não fornecida"}
 
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, 'WEB')
         result = get_itags(yt, itag)
         del yt
         gc.collect()
@@ -109,7 +109,7 @@ async def get_video_info(request: Request):
         return {"error": "URL inválida"}
 
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, 'WEB')
         info = responses.JSONResponse(content={
             'title': yt.title,
             'author': yt.author,
@@ -153,7 +153,7 @@ async def download_video(request: Request):
         return {"error": "itag não fornecido"}
 
     try:
-        yt = YouTube(url)
+        yt = YouTube(url, 'WEB')
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
 
@@ -256,5 +256,5 @@ async def download_file(file_id: str):
         path=file_path,
         filename=os.path.basename(file_path),
         media_type='application/octet-stream',
-        background=BackgroundTask(lambda: os.remove(file_path)),
+        background=BackgroundTasks(lambda: os.remove(file_path)),
     )
