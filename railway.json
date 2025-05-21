@@ -1,0 +1,12 @@
+{
+  "plugins": [
+    {
+      "name": "python",
+      "path": "."
+    },
+    {
+      "name": "nodejs",
+      "path": "."
+    }
+  ]
+}

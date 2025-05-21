@@ -92,7 +92,7 @@ async def get_itags_route(request: Request):
         return {"error": "URL não fornecida"}
 
     try:
-        yt = YouTube(url, "ANDROID")
+        yt = YouTube(url, "WEB")
         result = get_itags(yt, itag)
         del yt
         gc.collect()
@@ -109,7 +109,7 @@ async def get_video_info(request: Request):
         return {"error": "URL inválida"}
 
     try:
-        yt = YouTube(url, "ANDROID")
+        yt = YouTube(url, "WEB")
         info = responses.JSONResponse(content={
             'title': yt.title,
             'author': yt.author,
@@ -146,6 +146,8 @@ async def download_video(request: Request):
     data = await request.json()
     url = data.get('url')
     itag = data.get('itag')
+    visitor_data = data.get('visitorData')
+    po_token = data.get('poToken')
 
     if not url:
         return {"error": "URL não fornecida"}
@@ -153,7 +155,10 @@ async def download_video(request: Request):
         return {"error": "itag não fornecido"}
 
     try:
-        yt = YouTube(url, "ANDROID")
+        if visitor_data and po_token:
+            yt = YouTube(url, use_po_token=True, visitor_data=visitor_data, po_token=po_token)
+        else:
+            yt = YouTube(url, client="WEB", use_po_token=True)
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
 
