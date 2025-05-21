@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Request, responses
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 from pytubefix import YouTube
@@ -11,11 +11,10 @@ import os
 import re
 import gc
 
-# --- Configurações iniciais ---
+# --- Inicialização ---
 app = FastAPI()
-
 load_dotenv()
-BASE_URL = os.getenv("BASE_URL")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,117 +24,74 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Diretórios
 DOWNLOAD_DIR = "downloads"
 FINAL_DIR = "final"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(FINAL_DIR, exist_ok=True)
 
 downloads_temp = {}
-
-# Resoluções permitidas
 ALLOWED_RESOLUTIONS = ["1080p", "720p", "480p", "360p", "240p", "144p", "audio"]
 
 # --- Funções Auxiliares ---
 
-def get_itags(yt, itag=None):
-    available_streams = []
-    for s in yt.streams:
-        is_audio = s.includes_audio_track and not s.resolution
-        stream_type = s.abr if is_audio else (s.resolution or "unknown")
-        if stream_type in ALLOWED_RESOLUTIONS:
-            available_streams.append({
-                "itag": s.itag,
-                "type": "áudio" if is_audio else "vídeo",
-                "resolution": stream_type,
-                "mime_type": s.mime_type,
-            })
-
-    if itag:
-        return {
-            "error": f"Nenhum stream encontrado com itag {itag}",
-            "disponíveis": available_streams,
-        }
-    return {"disponíveis": available_streams}
+def sanitize_filename(name):
+    return re.sub(r'[\\/*?:"<>|]', "", name)
 
 async def delete_after_timeout(file_id: str, timeout: int = 60):
     await asyncio.sleep(timeout)
     file_info = downloads_temp.pop(file_id, None)
-    if file_info:
-        try:
-            if os.path.exists(file_info["path"]):
-                os.remove(file_info["path"])
-        except Exception as e:
-            print(f"Erro ao excluir arquivo: {e}")
+    if file_info and os.path.exists(file_info["path"]):
+        os.remove(file_info["path"])
     gc.collect()
 
-def sanitize_filename(name):
-    return re.sub(r'[\\/*?:"<>|]', "", name)
-
 def convert_to_mp3(input_path, output_path):
-    command = ['ffmpeg', '-y', '-i', input_path, output_path]
-    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['ffmpeg', '-y', '-i', input_path, output_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def download_with_ytdlp(url: str, output_path: str, audio_only: bool = False):
-    output_template = os.path.join(output_path, '%(title)s.%(ext)s')
-    command = [
-        'yt-dlp',
-        url,
-        '-o', output_template
-    ]
-
+    template = os.path.join(output_path, '%(title)s.%(ext)s')
+    command = ['yt-dlp', url, '-o', template]
     if audio_only:
         command += ['-f', 'bestaudio', '--extract-audio', '--audio-format', 'mp3']
     else:
         command += ['-f', 'bestvideo+bestaudio/best']
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+    return max([os.path.join(output_path, f) for f in os.listdir(output_path)], key=os.path.getmtime)
 
-    process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+def get_itags(yt, itag=None):
+    available = []
+    for s in yt.streams:
+        is_audio = s.includes_audio_track and not s.resolution
+        res = s.abr if is_audio else (s.resolution or "unknown")
+        if res in ALLOWED_RESOLUTIONS:
+            available.append({
+                "itag": s.itag,
+                "type": "áudio" if is_audio else "vídeo",
+                "resolution": res,
+                "mime_type": s.mime_type,
+            })
+    return {"disponíveis": available} if not itag else {"error": f"itag {itag} não encontrada", "disponíveis": available}
 
-    if process.returncode != 0:
-        raise Exception(f"Erro yt-dlp: {process.stderr}")
-
-    latest_file = max(
-        [os.path.join(output_path, f) for f in os.listdir(output_path)],
-        key=os.path.getmtime
-    )
-    return latest_file
-
-
-# --- Rotas da API ---
+# --- Rotas ---
 
 @app.get("/")
-def read_root():
-    return {"Hello": "World"}
+def root():
+    return {"message": "API de download de vídeos do YouTube"}
 
 @app.post("/get_itag")
-async def get_itags_route(request: Request):
+async def route_itags(request: Request):
     data = await request.json()
-    url = data.get('url')
-    itag = data.get('itag')
-
-    if not url:
-        return {"error": "URL não fornecida"}
-
     try:
-        yt = YouTube(url, "ANDROID")
-        result = get_itags(yt, itag)
-        del yt
-        gc.collect()
-        return result
+        yt = YouTube(data.get("url"), "ANDROID")
+        return get_itags(yt, data.get("itag"))
     except Exception as e:
         return {"error": str(e)}
 
 @app.post("/info")
-async def get_video_info(request: Request):
+async def route_info(request: Request):
     data = await request.json()
-    url = data.get('url')
-
-    if not url or not isinstance(url, str):
-        return {"error": "URL inválida"}
-
     try:
-        yt = YouTube(url, "ANDROID")
-        info = responses.JSONResponse(content={
+        yt = YouTube(data.get("url"), "ANDROID")
+        return {
             'title': yt.title,
             'author': yt.author,
             'length': yt.length,
@@ -143,164 +99,91 @@ async def get_video_info(request: Request):
             'thumbnail_url': yt.thumbnail_url,
             'url': yt.watch_url,
             'video_streams': [
-                {
-                    'itag': s.itag,
-                    'resolution': s.resolution,
-                    'mime_type': s.mime_type,
-                    'includes_audio_track': s.includes_audio_track,
-                }
+                {'itag': s.itag, 'resolution': s.resolution, 'mime_type': s.mime_type, 'includes_audio_track': s.includes_audio_track}
                 for s in yt.streams.filter(type="video")
             ],
             'audio_streams': [
-                {
-                    'itag': s.itag,
-                    'abr': s.abr,
-                    'mime_type': s.mime_type,
-                }
+                {'itag': s.itag, 'abr': s.abr, 'mime_type': s.mime_type}
                 for s in yt.streams.filter(only_audio=True)
-            ],
-        })
-        del yt
-        gc.collect()
-        return info
+            ]
+        }
     except Exception as e:
         return {"error": str(e)}
 
 @app.post("/download")
-async def download_video(request: Request):
+async def route_download(request: Request):
     data = await request.json()
-    url = data.get('url')
-    itag = data.get('itag')
+    url = data.get("url")
+    itag = data.get("itag")
 
-    if not url:
-        return {"error": "URL não fornecida"}
-    if not itag:
-        return {"error": "itag não fornecido"}
+    if not url or not itag:
+        return {"error": "URL ou itag ausente"}
 
     try:
         yt = YouTube(url, "ANDROID")
-    except Exception as e:
-        try:
-            is_audio = data.get('audio_only', False)
-            final_path = download_with_ytdlp(url, FINAL_DIR, audio_only=is_audio)
-
-            file_id = str(uuid.uuid4())
-            downloads_temp[file_id] = {"path": final_path}
-            asyncio.create_task(delete_after_timeout(file_id))
-
-            return {
-                "message": "Baixado com yt-dlp (fallback)",
-                "download_url": f"{BASE_URL}/download/{file_id}"
-            }
-        except Exception as fallback_error:
-            return {"error": f"Falha com pytubefix e yt-dlp: {str(fallback_error)}"}
-
-    try:
         stream = yt.streams.get_by_itag(itag)
-        title = sanitize_filename(yt.title)
-
         if not stream:
-            return {"error": f"Stream com itag {itag} não encontrada."}
+            return {"error": f"itag {itag} inválida"}
 
-
+        title = sanitize_filename(yt.title)
         is_audio = stream.mime_type.startswith("audio/")
-        resolution = "audio" if is_audio else (stream.resolution or "unknown")
+        resolution = stream.abr if is_audio else (stream.resolution or "unknown")
 
-        if resolution not in ALLOWED_RESOLUTIONS and resolution != "1080p":
-            del yt
-            del stream
-            gc.collect()
-            return {"error": f"Resolução {resolution} não permitida. Apenas {', '.join(ALLOWED_RESOLUTIONS)} e 1080p são permitidas."}
+        if resolution not in ALLOWED_RESOLUTIONS:
+            return {"error": f"Resolução não suportada: {resolution}"}
 
         if is_audio:
             ext = ".webm" if "webm" in stream.mime_type else ".m4a"
-            raw_filename = f"{title}_{stream.abr}{ext}"
-            raw_path = os.path.join(DOWNLOAD_DIR, raw_filename)
-            stream.download(output_path=DOWNLOAD_DIR, filename=raw_filename)
-
-            mp3_filename = f"{title}_{stream.abr}.mp3"
-            mp3_path = os.path.join(DOWNLOAD_DIR, mp3_filename)
-            convert_to_mp3(raw_path, mp3_path)
-            os.remove(raw_path)
-
-            final_path = os.path.join(FINAL_DIR, os.path.basename(mp3_path))
-            os.rename(mp3_path, final_path)
-
-            file_id = str(uuid.uuid4())
-            downloads_temp[file_id] = {"path": final_path}
-            asyncio.create_task(delete_after_timeout(file_id))
-
-            del yt
-            del stream
-            gc.collect()
-
-            return {"message": "Áudio convertido para MP3", "download_url": f"{BASE_URL}/download/{file_id}"}
-
+            raw = os.path.join(DOWNLOAD_DIR, f"{title}_{resolution}{ext}")
+            mp3 = os.path.join(FINAL_DIR, f"{title}_{resolution}.mp3")
+            stream.download(output_path=DOWNLOAD_DIR, filename=os.path.basename(raw))
+            convert_to_mp3(raw, mp3)
+            os.remove(raw)
+            final_path = mp3
         elif not stream.includes_audio_track:
             video_path = os.path.join(DOWNLOAD_DIR, f"{title}_{resolution}_video.mp4")
             stream.download(output_path=DOWNLOAD_DIR, filename=os.path.basename(video_path))
-
             audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
             audio_ext = ".webm" if "webm" in audio_stream.mime_type else ".m4a"
             audio_path = os.path.join(DOWNLOAD_DIR, f"{title}_audio{audio_ext}")
             audio_stream.download(output_path=DOWNLOAD_DIR, filename=os.path.basename(audio_path))
-
             final_path = os.path.join(FINAL_DIR, f"{title}_{resolution}.mp4")
-            command = [
-                "ffmpeg", "-y", "-nostdin",
-                "-i", video_path,
-                "-i", audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-strict", "experimental",
-                final_path,
-            ]
-            subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([
+                'ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental',
+                final_path
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             os.remove(video_path)
             os.remove(audio_path)
+        else:
+            filename = f"{title}_{resolution}.mp4"
+            final_path = os.path.join(FINAL_DIR, filename)
+            stream.download(output_path=FINAL_DIR, filename=filename)
 
+        file_id = str(uuid.uuid4())
+        downloads_temp[file_id] = {"path": final_path}
+        asyncio.create_task(delete_after_timeout(file_id))
+        return {"message": "Download pronto", "download_url": f"{BASE_URL}/download/{file_id}"}
+
+    except Exception:
+        try:
+            is_audio = data.get('audio_only', False)
+            final_path = download_with_ytdlp(url, FINAL_DIR, audio_only=is_audio)
             file_id = str(uuid.uuid4())
             downloads_temp[file_id] = {"path": final_path}
             asyncio.create_task(delete_after_timeout(file_id))
-
-            del yt
-            del stream
-            del audio_stream
-            gc.collect()
-
-            return {"message": f"Vídeo {resolution} com áudio mesclado", "download_url": f"{BASE_URL}/download/{file_id}"}
-
-        else:
-            filename = f"{title}_{resolution}.mp4"
-            download_path = os.path.join(DOWNLOAD_DIR, filename)
-            stream.download(output_path=DOWNLOAD_DIR, filename=filename)
-
-            file_id = str(uuid.uuid4())
-            downloads_temp[file_id] = {"path": download_path}
-            asyncio.create_task(delete_after_timeout(file_id))
-
-            del yt
-            del stream
-            gc.collect()
-
-            return {"message": f"Vídeo {resolution} com áudio embutido", "download_url": f"{BASE_URL}/download/{file_id}"}
-
-    except Exception as e:
-        return {"error": str(e)}
+            return {"message": "Fallback com yt-dlp", "download_url": f"{BASE_URL}/download/{file_id}"}
+        except Exception as fallback_error:
+            return {"error": f"Erro total: {str(fallback_error)}"}
 
 @app.get("/download/{file_id}")
-async def download_file(file_id: str):
+async def route_file(file_id: str):
     file_info = downloads_temp.pop(file_id, None)
-    if not file_info:
-        return {"error": "Arquivo expirado ou já baixado"}
-
-    file_path = file_info["path"]
-    if not os.path.exists(file_path):
-        return {"error": "Arquivo não encontrado"}
-
+    if not file_info or not os.path.exists(file_info["path"]):
+        return JSONResponse({"error": "Arquivo expirado ou não encontrado"})
     return FileResponse(
-        path=file_path,
-        filename=os.path.basename(file_path),
+        path=file_info["path"],
+        filename=os.path.basename(file_info["path"]),
         media_type='application/octet-stream',
-        background=BackgroundTask(lambda: os.remove(file_path)),
+        background=BackgroundTask(lambda: os.remove(file_info["path"]))
     )
