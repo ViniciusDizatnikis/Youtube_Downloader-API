@@ -84,6 +84,7 @@ def read_root():
 
 @app.post("/get_itag")
 async def get_itags_route(request: Request):
+
     data = await request.json()
     url = data.get('url')
     itag = data.get('itag')
