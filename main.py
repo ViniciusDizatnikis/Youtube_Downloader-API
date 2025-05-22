@@ -1,17 +1,15 @@
 from fastapi import FastAPI, Request, responses
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import BackgroundTasks
+from starlette.background import BackgroundTask
 from pytubefix import YouTube
 from dotenv import load_dotenv
-from google.oauth2.credentials import Credentials
 import subprocess
 import asyncio
 import uuid
 import os
 import re
 import gc
-import json
 
 # --- Configurações iniciais ---
 app = FastAPI()
@@ -38,34 +36,6 @@ downloads_temp = {}
 # Resoluções permitidas
 ALLOWED_RESOLUTIONS = ["1080p", "720p", "480p", "360p", "240p", "144p", "audio"]
 
-# --- Carregar credenciais OAuth compartilhadas ---
-
-def authenticate_and_save_token():
-    # Cria uma instância YouTube que requer OAuth e cache de token
-    yt = YouTube(use_oauth=True, allow_oauth_cache=True)
-
-    # Isso vai abrir o navegador para autenticar, só precisa rodar uma vez
-    print("Autentique no navegador e depois pressione Enter aqui...")
-    input()
-
-    # Acessa o token cache (local padrão do pytube)
-    token_cache_file = os.path.expanduser("~/.cache/pytube_oauth2.json")
-    if not os.path.exists(token_cache_file):
-        print("Token cache não encontrado.")
-        return
-
-    # Carrega o token do cache e salva no token.json para sua API usar
-    with open(token_cache_file, "r") as f:
-        token_data = json.load(f)
-
-    with open("token.json", "w") as f:
-        json.dump(token_data, f)
-
-    print("Token salvo em token.json para uso na API.")
-
-if __name__ == "__main__":
-    authenticate_and_save_token()
-    
 # --- Funções Auxiliares ---
 
 def get_itags(yt, itag=None):
@@ -95,8 +65,8 @@ async def delete_after_timeout(file_id: str, timeout: int = 60):
         try:
             if os.path.exists(file_info["path"]):
                 os.remove(file_info["path"])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Erro ao excluir arquivo: {e}")
     gc.collect()
 
 def sanitize_filename(name):
@@ -110,17 +80,10 @@ def convert_to_mp3(input_path, output_path):
 
 @app.get("/")
 def read_root():
-    if shared_credentials is None:
-        return {"error": "OAuth token não configurado."}
-    # Exemplo simples para testar credenciais
-    yt = YouTube(use_oauth=True, allow_oauth_cache=False, credentials=shared_credentials)
-    return {"Hello": "World", "title": yt.title if hasattr(yt, 'title') else "N/A"}
+    return {"Hello": "World"}
 
 @app.post("/get_itag")
 async def get_itags_route(request: Request):
-    if shared_credentials is None:
-        return {"error": "OAuth token não configurado."}
-    
     data = await request.json()
     url = data.get('url')
     itag = data.get('itag')
@@ -129,7 +92,7 @@ async def get_itags_route(request: Request):
         return {"error": "URL não fornecida"}
 
     try:
-        yt = YouTube(url, 'WEB', use_oauth=True, allow_oauth_cache=False, credentials=shared_credentials)
+        yt = YouTube(url, 'WEB')
         result = get_itags(yt, itag)
         del yt
         gc.collect()
@@ -139,9 +102,6 @@ async def get_itags_route(request: Request):
 
 @app.post("/info")
 async def get_video_info(request: Request):
-    if shared_credentials is None:
-        return {"error": "OAuth token não configurado."}
-    
     data = await request.json()
     url = data.get('url')
 
@@ -149,7 +109,7 @@ async def get_video_info(request: Request):
         return {"error": "URL inválida"}
 
     try:
-        yt = YouTube(url, 'WEB', use_oauth=True, allow_oauth_cache=False, credentials=shared_credentials)
+        yt = YouTube(url, 'WEB')
         info = responses.JSONResponse(content={
             'title': yt.title,
             'author': yt.author,
@@ -183,9 +143,6 @@ async def get_video_info(request: Request):
 
 @app.post("/download")
 async def download_video(request: Request):
-    if shared_credentials is None:
-        return {"error": "OAuth token não configurado."}
-    
     data = await request.json()
     url = data.get('url')
     itag = data.get('itag')
@@ -196,9 +153,13 @@ async def download_video(request: Request):
         return {"error": "itag não fornecido"}
 
     try:
-        yt = YouTube(url, 'WEB', use_oauth=True, allow_oauth_cache=False, credentials=shared_credentials)
+        yt = YouTube(url, 'WEB')
         stream = yt.streams.get_by_itag(itag)
         title = sanitize_filename(yt.title)
+
+        if not stream:
+            return {"error": f"Stream com itag {itag} não encontrada."}
+
 
         is_audio = stream.mime_type.startswith("audio/")
         resolution = "audio" if is_audio else (stream.resolution or "unknown")
@@ -244,7 +205,7 @@ async def download_video(request: Request):
 
             final_path = os.path.join(FINAL_DIR, f"{title}_{resolution}.mp4")
             command = [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-nostdin",
                 "-i", video_path,
                 "-i", audio_path,
                 "-c:v", "copy",
@@ -299,5 +260,5 @@ async def download_file(file_id: str):
         path=file_path,
         filename=os.path.basename(file_path),
         media_type='application/octet-stream',
-        background=BackgroundTasks(lambda: os.remove(file_path)),
+        background=BackgroundTask(lambda: os.remove(file_path)),
     )
