@@ -40,5 +40,5 @@ Para mais informações sobre a API, consulte a documentação personalizada em:
 
 > **Observação:** Certifique-se de ter o Python e o Uvicorn instalados. Caso não tenha, instale-os via pip:
 > ```bash
-> pip install uvicorn fastapi
+> pip install -r requirements.txt
 > ```
