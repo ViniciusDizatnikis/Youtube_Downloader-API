@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from starlette.background import BackgroundTask
 from pytubefix import YouTube
@@ -17,7 +18,7 @@ import gc
 
 # --- Default settings ---
 app = FastAPI()
-
+app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 #  --- permissions ---
 app.add_middleware(
@@ -47,13 +48,49 @@ downloads_temp = {}
 
 ALLOWED_RESOLUTIONS = ["1080p", "720p", "480p", "360p", "240p", "144p", "audio"]
 
+clients = ["WEB","WEB_EMBED","WEB_MUSIC","WEB_CREATOR","WEB_SAFARI","MWEB","WEB_KIDS","ANDROID","ANDROID_VR","ANDROID_MUSIC","ANDROID_CREATOR","ANDROID_TESTSUITE","ANDROID_PRODUCER","ANDROID_KIDS","IOS","IOS_MUSIC","IOS_CREATOR","IOS_KIDS"]
+
 # --- Rotas da API ---
 
-@app.get("/")
-def read_root():
+@app.get("/", response_class=HTMLResponse)
+def serve_index():
+    html_path = os.path.join("assets", "index.html")
+    with open(html_path, "r", encoding="utf-8") as file:
+        html_content = file.read()
+    return HTMLResponse(content=html_content)
+
+
+@app.get("/config")
+def config_route():
     return {
-        "Hello": "World"
+        "version": "1.0.0",
+        "author": "Vinicius Dizatnikis",
+        "lib":  "pytubefix",
+        "token_method": {
+            "using_token": "Using the token method with a client may sometimes result in an unsuccessful request, depending on pytubefix",
+            "not_using_token": "Not using the token method will result in a successful request, but your IP might be blocked by YouTube",
+            "clients": [
+                "WEB",
+                "WEB_EMBED",
+                "WEB_MUSIC",
+                "WEB_CREATOR",
+                "WEB_SAFARI",
+                "MWEB",
+                "WEB_KIDS",
+                "ANDROID",
+                "ANDROID_VR",
+                "ANDROID_MUSIC",
+                "ANDROID_CREATOR",
+                "ANDROID_TESTSUITE",
+                "ANDROID_PRODUCER",
+                "ANDROID_KIDS",
+                "IOS",
+                "IOS_MUSIC",
+                "IOS_CREATOR",
+                "IOS_KIDS"
+            ]
         }
+    }
 
 
 @app.post("/resolutions")
@@ -63,19 +100,48 @@ async def resolutions_route(request: Request):
 
     url = data.get('url')
 
+    token_method = data.get('token_method')
+
+    if token_method:
+        token_method = token_method.upper()
+    else:
+        token_method = None
+
+    used_token_method = False
+
     if not url:
         return {
             "Attention": "URL not found"
             }
 
     try:
-        yt = YouTube(url)
+        if token_method in clients:
+            yt = YouTube(url, token_method)
+            used_token_method = True
+        else:
+            yt = YouTube(url)
+                
 
         result = get_video_resolutions(yt)
 
-        return result
+        if used_token_method:
+            return {
+                "status": "success",
+                "token_method": used_token_method,
+                "client_of_token": token_method,
+                "Result": result
+                }
+        else:
+            return {
+                "status": "success",
+                "token_method": used_token_method,
+                "Result": result
+                } 
     except Exception as e:
-        return {"error": str(e)}
+         return {
+            "status": "error",
+            "error": str(e)
+            }
     finally:
         if yt:
             del yt
@@ -84,22 +150,53 @@ async def resolutions_route(request: Request):
 
 @app.post("/info")
 async def info_route(request: Request):  
+
     data = await request.json()
+
     url = data.get('url')
 
+    token_method = data.get('token_method')
+
+    if token_method:
+        token_method = token_method.upper()
+    else:
+        token_method = None
+    
+    used_token_method = False
+    
     if not url:
         return {
+            "status": "error",
             "Attention": "URL not found"
             }
 
     try:
-        yt = YouTube(url)
+        if token_method in clients:
+            yt = YouTube(url, token_method)
+            used_token_method = True
+        else:
+            yt = YouTube(url)
 
         result = get_video_info(yt)  
 
-        return result                
+        if used_token_method:
+            return {
+                "status": "success",
+                "token_method": used_token_method,
+                "client_of_token": token_method,
+                "Result": result
+                }
+        else:
+            return {
+                "status": "success",
+                "token_method": used_token_method,
+                "Result": result
+                }                
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "status": "error",
+            "error": str(e)
+            }
     finally:
         if yt:
             del yt
@@ -115,6 +212,15 @@ async def download_route(request: Request):
 
     itag = data.get('itag')
 
+    token_method = data.get('token_method')
+
+    if token_method:
+        token_method = token_method.upper()
+    else:
+        token_method = None
+
+    used_token_method = False
+
 
     if not url:
         return {
@@ -127,7 +233,11 @@ async def download_route(request: Request):
     
 
     try:
-        yt = YouTube(url)
+        if token_method in clients:
+            yt = YouTube(url, token_method)
+            used_token_method = True
+        else:
+            yt = YouTube(url)
 
         stream = yt.streams.get_by_itag(itag)
 
@@ -138,10 +248,8 @@ async def download_route(request: Request):
         resolution = "audio" if is_audio else (stream.resolution or "unknown")
 
         if resolution not in ALLOWED_RESOLUTIONS:
-            del yt
-            del stream
-            gc.collect()
             return {
+                "status": "error",
                 "error": f"Resolution {resolution} not allowed. Just {', '.join(ALLOWED_RESOLUTIONS)} are alowed."
                 }
 
@@ -163,14 +271,30 @@ async def download_route(request: Request):
                 downloads_temp[file_id] = {"path": final_path}
 
                 asyncio.create_task(delete_after_timeout(file_id, downloads_temp))
+
+                result = {
+                "message": "Audio success downloaded", 
+                "url_download": f"{URL_BASE}/download/{file_id}"
+                }
                 
-                return {
-                    "message": "Áudio convertido para MP3", 
-                    "url_download": f"{URL_BASE}/download/{file_id}"
+                if used_token_method:
+                    return {
+                    "status": "success",
+                    "token_method": used_token_method,
+                    "client_of_token": token_method,
+                    "Result": result
                     }
-            
+                else:
+                    return {
+                    "status": "success",
+                    "token_method": used_token_method,
+                    "Result": result
+                }                  
             except Exception as e:
-                return {"error": str(e)}
+                 return {
+                "status": "error",
+                "error": str(e)
+                }
             finally:
                 if yt:
                     del yt
@@ -218,11 +342,16 @@ async def download_route(request: Request):
                 asyncio.create_task(delete_after_timeout(file_id, downloads_temp))
 
                 return {
-                    "message": f"Video {title} with mixed auido", 
+                    "status": "success",
+                    "token_method": used_token_method,
+                    "message": f"Video {title} with mixed audio", 
                     "url_download": f"{URL_BASE}/download/{file_id}"
                     }
             except Exception as e:
-                return {"error": str(e)}
+                 return {
+                "status": "error",
+                "error": str(e)
+                }
             finally:
                 if yt:
                     del yt
@@ -248,10 +377,13 @@ async def download_route(request: Request):
 
                 return {
                     "message": f"Vídeo {resolution} com áudio embutido", 
-                    "download_url": f"{URL_BASE}/download/{file_id}"
+                    "url_download": f"{URL_BASE}/download/{file_id}"
                     }
             except Exception as e:
-                return {"error": str(e)}
+                 return {
+                "status": "error",
+                "error": str(e)
+                }
             finally:
                 if yt:
                     del yt
@@ -260,7 +392,10 @@ async def download_route(request: Request):
                 gc.collect()
 
     except Exception as e:
-        return {"error": str(e)}
+         return {
+            "status": "error",
+            "error": str(e)
+            }
     
 
 @app.get("/download/{file_id}")
@@ -269,12 +404,18 @@ async def download_file_route(file_id: str):
     file_info = downloads_temp.pop(file_id)
 
     if not file_info:
-        return {"error": "archive not found"}
+        return {
+            "status": "error",
+            "error": "archive not found"
+            }
 
     file_path = file_info["path"]
 
     if not os.path.exists(file_path):
-        return {"error": "archive not found"}
+        return {
+            "status": "error",
+            "error": "archive not found"
+            }
 
     return FileResponse(
         path=file_path,
