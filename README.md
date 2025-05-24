@@ -34,6 +34,8 @@ Para mais informações sobre a API, consulte a documentação personalizada em:
 
 [Documentação da API opção 2](https://youtube-downloader-api-s9lh.onrender.com)
 
+[docs/documentation.rst](https://github.com/ViniciusDizatnikis/Youtube_Downloader-API/blob/master/docs/documentation.rst)
+
 ---
 
 > **Observação:** Certifique-se de ter o Python e o Uvicorn instalados. Caso não tenha, instale-os via pip:
